@@ -1,4 +1,5 @@
 import os
+import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -6,18 +7,21 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # so all models can inherit from it
 Base = declarative_base()
 
-# I read DATABASE_URL from environment variables
-# because I never want database credentials inside the codebase
-DATABASE_URL = os.getenv("DATABASE_URL")
+logger = logging.getLogger(__name__)
 
-# I fail fast if DATABASE_URL is missing
-# because it is better to crash early than debug silent DB errors
+# I read DATABASE_URL from environment variables
+# For local development, fall back to a SQLite file when not provided
+DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set")
+    logger.warning("DATABASE_URL is not set, falling back to sqlite:///./dev.db for local development")
+    DATABASE_URL = "sqlite:///./dev.db"
 
 # I create the SQLAlchemy engine using the database URL
-# pool_pre_ping=True helps me avoid broken or stale connections
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# Use sqlite-specific connect args when needed and keep pool_pre_ping
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, pool_pre_ping=True)
+else:
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # I create a database session factory
 # I disable autocommit and autoflush for safer transaction control
