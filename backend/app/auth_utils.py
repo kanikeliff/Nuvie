@@ -1,13 +1,13 @@
-from passlib.context import CryptContext
+from passlib.hash import pbkdf2_sha256
 
-# I create a password hashing context
-# bcrypt is a safe default hashing algorithm for passwords
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# I hash a plain text password before storing it
+# Use passlib's pbkdf2_sha256 hasher directly for consistent hash format
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return pbkdf2_sha256.hash(password)
 
-# I verify a plain password against the stored hash
+
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+    try:
+        return pbkdf2_sha256.verify(password, password_hash)
+    except Exception:
+        return False

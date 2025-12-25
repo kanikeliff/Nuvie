@@ -5,3 +5,4 @@ psycopg
 python-jose[cryptography]
 passlib[bcrypt]
 requests
+alembic
