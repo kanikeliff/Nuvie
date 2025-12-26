@@ -1,7 +1,45 @@
-fastapi
-uvicorn
-sqlalchemy
-psycopg
-python-jose[cryptography]
-passlib[bcrypt]
-requests
+# Nuvie Backend Dependencies
+# Pinned versions for reproducible builds (December 2025)
+
+# Web Framework
+fastapi>=0.109.0,<0.115.0
+uvicorn[standard]>=0.27.0,<0.35.0
+starlette>=0.35.0,<0.45.0
+
+# Database
+sqlalchemy>=2.0.25,<2.1.0
+psycopg[binary]>=3.1.17,<3.3.0
+
+# Authentication & Security
+python-jose[cryptography]>=3.3.0,<3.4.0
+passlib[bcrypt]>=1.7.4,<1.8.0
+
+# HTTP Client (async-first)
+httpx>=0.26.0,<0.28.0
+
+# Validation
+pydantic>=2.5.0,<2.10.0
+pydantic-settings>=2.1.0,<2.7.0
+email-validator>=2.1.0,<2.3.0
+
+# Rate Limiting
+slowapi>=0.1.9,<0.2.0
+
+# Caching
+redis>=5.0.0,<6.0.0
+
+# Circuit Breaker
+circuitbreaker>=2.0.0,<3.0.0
+
+# Logging & Monitoring
+python-json-logger>=2.0.0,<2.1.0
+structlog>=24.1.0,<25.0.0
+
+# Testing (dev dependencies)
+pytest>=8.0.0,<9.0.0
+pytest-cov>=4.1.0,<5.0.0
+pytest-asyncio>=0.23.0,<0.24.0
+
+# Type checking (dev dependencies)
+mypy>=1.8.0,<2.0.0
+types-redis>=4.6.0,<5.0.0

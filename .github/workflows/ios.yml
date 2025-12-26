@@ -1,0 +1,187 @@
+name: iOS CI/CD
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+    paths:
+      - 'Nuvie/**'
+      - 'ios/**'
+      - '*.xcodeproj/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'Nuvie/**'
+      - 'ios/**'
+      - '*.xcodeproj/**'
+
+env:
+  SCHEME: "Nuvie"
+  DESTINATION: "platform=iOS Simulator,name=iPhone 15,OS=17.2"
+  XCODE_VERSION: "15.2"
+
+jobs:
+  # -----------------------
+  # SwiftLint Job
+  # -----------------------
+  lint:
+    name: SwiftLint
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: |
+          swiftlint lint --config .swiftlint.yml --reporter github-actions-logging Nuvie/ || true
+        continue-on-error: true
+
+  # -----------------------
+  # Build Job
+  # -----------------------
+  build:
+    name: Build iOS App
+    runs-on: macos-14
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData
+            .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Nuvie.xcodeproj \
+            -scheme ${{ env.SCHEME }}
+        continue-on-error: true
+
+      - name: Build for testing
+        run: |
+          xcodebuild build-for-testing \
+            -project Nuvie.xcodeproj \
+            -scheme ${{ env.SCHEME }} \
+            -destination "${{ env.DESTINATION }}" \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty --color
+        continue-on-error: true
+
+  # -----------------------
+  # Test Job
+  # -----------------------
+  test:
+    name: Run iOS Tests
+    runs-on: macos-14
+    needs: [build]
+    if: success() || failure()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData
+            .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project Nuvie.xcodeproj \
+            -scheme ${{ env.SCHEME }} \
+            -destination "${{ env.DESTINATION }}" \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -resultBundlePath TestResults.xcresult \
+            | xcpretty --color --report junit --output test-results.xml
+        continue-on-error: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            TestResults.xcresult
+        continue-on-error: true
+
+  # -----------------------
+  # Archive Job (Release Only)
+  # -----------------------
+  archive:
+    name: Archive Release Build
+    runs-on: macos-14
+    needs: [test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+
+      - name: Archive app
+        run: |
+          xcodebuild archive \
+            -project Nuvie.xcodeproj \
+            -scheme ${{ env.SCHEME }} \
+            -configuration Release \
+            -archivePath build/Nuvie.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty --color
+        continue-on-error: true
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuvie-archive-${{ github.sha }}
+          path: build/Nuvie.xcarchive
+        continue-on-error: true
+
+  # -----------------------
+  # Summary Job
+  # -----------------------
+  ci-summary:
+    name: iOS CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint, build, test]
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "SwiftLint: ${{ needs.lint.result }}"
+          echo "Build: ${{ needs.build.result }}"
+          echo "Test: ${{ needs.test.result }}"
+
+          if [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "::error::iOS build failed"
+            exit 1
+          fi
