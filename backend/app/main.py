@@ -1,4 +1,5 @@
 from backend.session import engine, Base
+from backend.models.user import User  # noqa: F401
 from fastapi import FastAPI
 
 from .feed import router as feed_router
