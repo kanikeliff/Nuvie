@@ -7,3 +7,7 @@ psycopg
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 requests
+numpy
+pandas
+scipy
+scikit-learn
