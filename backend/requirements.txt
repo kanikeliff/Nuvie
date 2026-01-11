@@ -7,3 +7,5 @@ psycopg
 python-jose[cryptography]
 passlib[bcrypt]
 requests
+passlib[bcrypt]==1.7.4
+python-jose==3.3.0
