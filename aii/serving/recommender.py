@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import traceback
 from typing import Any, Dict, List, Optional
 
 from aii.models.ibcf import IBCFRecommender, ModelConfig
@@ -10,6 +11,7 @@ from aii.models.ibcf import IBCFRecommender, ModelConfig
 _lock = threading.Lock()
 _model: Optional[IBCFRecommender] = None
 _model_ready = False
+_model_error: Optional[str] = None
 
 
 def _load_model_once() -> None:
@@ -21,7 +23,9 @@ def _load_model_once() -> None:
         try:
             cfg = ModelConfig()
         except Exception as e:
-            print("[AI] Failed to import or create ModelConfig:", e)
+            _model_error = traceback.format_exc()
+            print("[AI] Failed to import or create ModelConfig:", repr(e))
+            print(_model_error)
             _model_ready = False
             return
 
@@ -48,18 +52,24 @@ def _load_model_once() -> None:
             try:
                 m.load()
             except Exception as e:
+                _model_error = traceback.format_exc()
                 print("[AI] IBCFRecommender.load() failed:", repr(e))
+                print(_model_error)
             # load_or_fit caches similarities; ensure it's invoked
             try:
                 m.load_or_fit()
             except Exception as e:
+                _model_error = traceback.format_exc()
                 print("[AI] IBCFRecommender.load_or_fit() failed:", repr(e))
+                print(_model_error)
 
             _model = m
             _model_ready = True
             print("[AI] model loaded, sims_cache=", cfg.sims_cache)
         except Exception as e:
+            _model_error = traceback.format_exc()
             print("[AI] Failed to initialize model:", repr(e))
+            print(_model_error)
             _model_ready = False
 
 
@@ -136,4 +146,13 @@ def recommend_for_user(
 
 def ai_status() -> dict:
     """Return a small status dict for health endpoints."""
-    return {"ready": bool(_model_ready)}
+    enabled = False
+    try:
+        enabled = bool(int(os.environ.get("AI_ENABLED", "0")))
+    except Exception:
+        enabled = False
+    return {
+        "enabled": enabled,
+        "ready": bool(_model_ready),
+        "error": _model_error,
+    }
