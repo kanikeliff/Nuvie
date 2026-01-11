@@ -1,129 +1,89 @@
 import os
 import uuid
-from datetime import datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import jwt, JWTError
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
 
 from backend.session import get_db
 from backend.models.user import User
+from backend.app.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_token,
+)
+
+from backend.app.schemas import RegisterRequest, LoginRequest, TokenResponse, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+bearer = HTTPBearer(auto_error=True)
 
-bearer_scheme = HTTPBearer(auto_error=False)
+def demo_mode_on() -> bool:
+    v = os.getenv("DEMO_MODE", "").strip().lower()
+    return v in {"1", "true", "yes", "on"}
 
-# JWT settings
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
-JWT_ALGO = "HS256"
-JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "60"))
+@router.post("/register", response_model=UserPublic)
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    # DEMO kapalı olmalı
+    if demo_mode_on():
+        return {"id": "demo-user-123", "email": str(req.email)}
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    email = str(req.email).lower().strip()
 
-
-# -----------------------
-# Schemas
-# -----------------------
-class AuthRegisterIn(BaseModel):
-    email: str = Field(min_length=3, max_length=200)
-    password: str = Field(min_length=6, max_length=72)
-
-
-class AuthLoginIn(BaseModel):
-    email: str = Field(min_length=3, max_length=200)
-    password: str = Field(min_length=1, max_length=72)
-
-
-class TokenOut(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-# -----------------------
-# Helpers
-# -----------------------
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
-
-
-def create_access_token(user_id: str, email: str) -> str:
-    exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRES_MINUTES)
-    payload = {"sub": str(user_id), "email": email, "exp": exp}
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
-
-
-# -----------------------
-# Routes
-# -----------------------
-@router.post("/register")
-def register(user_data: AuthRegisterIn, db: Session = Depends(get_db)):
-    # email exists?
-    existing = db.query(User).filter(User.email == user_data.email).first()
+    existing = db.query(User).filter(User.email == email).first()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-    new_user = User(
-        id=str(uuid.uuid4()),  # because DB 'id' is varchar
-        email=user_data.email,
-        password_hash=hash_password(user_data.password),
+    user = User(
+        id=str(uuid.uuid4()),
+        email=email,
+        password_hash=hash_password(req.password),
     )
-
-    db.add(new_user)
+    db.add(user)
     db.commit()
-    db.refresh(new_user)
+    db.refresh(user)
 
-    return {"message": "Registered", "user": {"id": new_user.id, "email": new_user.email}}
+    return {"id": user.id, "email": user.email}
 
+@router.post("/login", response_model=TokenResponse)
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    if demo_mode_on():
+        token = create_access_token({"sub": "demo-user-123"})
+        return {"access_token": token, "token_type": "bearer"}
 
-@router.post("/login", response_model=TokenOut)
-def login(user_data: AuthLoginIn, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_data.email).first()
+    email = str(req.email).lower().strip()
+    user = db.query(User).filter(User.email == email).first()
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not verify_password(user_data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token(user.id, user.email)
+    exp_min = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    token = create_access_token({"sub": user.id}, expires_minutes=exp_min)
     return {"access_token": token, "token_type": "bearer"}
 
-
 def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    creds: HTTPAuthorizationCredentials = Depends(bearer),
     db: Session = Depends(get_db),
-):
-    # REAL MODE: token required
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Missing token")
-
-    token = credentials.credentials
+) -> User:
+    token = creds.credentials
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        payload = decode_token(token)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-        user = db.query(User).filter(User.id == str(user_id)).first()
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
 
-        return {"id": user.id, "email": user.email}
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
 
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-@router.get("/me")
-def me(user=Depends(get_current_user)):
     return user
 
+@router.get("/me", response_model=UserPublic)
+def me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
