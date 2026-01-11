@@ -1,11 +1,3 @@
-//
-//  ExplanationBadge.swift
-//  Nuvie
-//
-//  created for phase 3. why recommended ui
-//  displays explanation for movie recommendations
-//
-
 import SwiftUI
 
 struct ExplanationBadge: View {
@@ -18,71 +10,92 @@ struct ExplanationBadge: View {
     }
     
     var body: some View {
-        Button(action: {
-            showSheet = true
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: iconName)
-                    .font(.system(size: 11))
-                Text(primaryReasonText)
-                    .font(.system(size: 11, weight: .medium))
+        if let reasonType = explanation.reason_type, !reasonType.isEmpty {
+            Button(action: {
+                showSheet = true
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: iconName)
+                        .font(.system(size: 11))
+                    Text(formattedReasonText)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(iconColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(iconColor.opacity(0.2))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
             }
-            .foregroundColor(iconColor)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(iconColor.opacity(0.2))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        } else {
+            EmptyView()
         }
     }
     
     private var iconName: String {
-        switch explanation.primary_reason {
-        case "genre_match":
-            return "sparkles"
-        case "friend_activity":
-            return "person.2.fill"
-        case "similar_movies":
-            return "film.fill"
-        case "popular":
-            return "chart.bar.fill"
-        default:
-            return "questionmark.circle.fill"
+        if let reasonType = explanation.reason_type {
+            switch reasonType {
+            case "genre_affinity":
+                return "sparkles"
+            case "item_similarity":
+                return "film.fill"
+            case "friend_activity":
+                return "person.2.fill"
+            case "popular":
+                return "chart.bar.fill"
+            default:
+                return "questionmark.circle.fill"
+            }
         }
+        return "questionmark.circle.fill"
     }
     
     private var iconColor: Color {
-        switch explanation.primary_reason {
-        case "genre_match":
-            return Color(hex: "f59e0b")
-        case "friend_activity":
-            return Color(hex: "3b82f6")
-        case "similar_movies":
-            return Color(hex: "10b981")
-        case "popular":
-            return Color(hex: "f97316")
-        default:
-            return Color(hex: "94a3b8")
+        if let reasonType = explanation.reason_type {
+            switch reasonType {
+            case "genre_affinity":
+                return Color(hex: "f59e0b")
+            case "item_similarity":
+                return Color(hex: "10b981")
+            case "friend_activity":
+                return Color(hex: "3b82f6")
+            case "popular":
+                return Color(hex: "f97316")
+            default:
+                return Color(hex: "94a3b8")
+            }
         }
+        return Color(hex: "94a3b8")
     }
     
-    private var primaryReasonText: String {
-        if let topFactor = explanation.factors.first {
-            return topFactor.description
+    private var formattedReasonText: String {
+        guard let reasonType = explanation.reason_type else {
+            return "recommended for you"
         }
         
-        switch explanation.primary_reason {
-        case "genre_match":
-            return "matches your taste"
+        switch reasonType {
+        case "item_similarity":
+            if let context = explanation.reason_context, !context.isEmpty {
+                return "Because you watched \(context)"
+            }
+            return "Similar to your favorites"
+            
+        case "genre_affinity":
+            if let context = explanation.reason_context, !context.isEmpty {
+                let matchPercent = Int(explanation.confidence * 100)
+                return "\(context) Fan (\(matchPercent)% Match)"
+            }
+            return "Genre Match"
+            
         case "friend_activity":
             if let friendRatings = explanation.factors.first(where: { $0.type == "friend_activity" })?.payload?["count"] {
                 return "\(friendRatings) friends loved this"
             }
             return "friends recommend"
-        case "similar_movies":
-            return "similar to your favorites"
-        case "popular":
-            return "trending now"
+            
         default:
+            if let topFactor = explanation.factors.first {
+                return topFactor.description
+            }
             return "recommended for you"
         }
     }
@@ -97,7 +110,6 @@ struct ExplanationSheet: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    // header
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Why this movie?")
                             .font(.system(size: 24, weight: .bold))
@@ -109,7 +121,6 @@ struct ExplanationSheet: View {
                     }
                     .padding(.bottom, 8)
                     
-                    // confidence badge
                     HStack {
                         Text("Confidence: \(Int(explanation.confidence * 100))%")
                             .font(.system(size: 14, weight: .medium))
@@ -120,7 +131,6 @@ struct ExplanationSheet: View {
                             .clipShape(Capsule())
                     }
                     
-                    // factors
                     VStack(alignment: .leading, spacing: 16) {
                         Text("Reasons")
                             .font(.system(size: 18, weight: .bold))
@@ -153,7 +163,6 @@ struct ExplanationFactorCard: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // number badge
             Text("\(index)")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundColor(.white)
@@ -162,18 +171,15 @@ struct ExplanationFactorCard: View {
                 .clipShape(Circle())
             
             VStack(alignment: .leading, spacing: 4) {
-                // type label
                 Text(factorTypeLabel)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(factorColor)
                 
-                // description
                 Text(factor.description)
                     .font(.system(size: 14))
                     .foregroundColor(.white)
                     .fixedSize(horizontal: false, vertical: true)
                 
-                // weight indicator
                 HStack(spacing: 4) {
                     Text("Weight: \(Int(factor.weight * 100))%")
                         .font(.system(size: 11))
@@ -191,11 +197,11 @@ struct ExplanationFactorCard: View {
     
     private var factorTypeLabel: String {
         switch factor.type {
-        case "genre_match":
+        case "genre_match", "genre_affinity":
             return "Genre Match"
         case "friend_activity":
             return "Friend Activity"
-        case "similar_movies":
+        case "similar_movies", "item_similarity":
             return "Similar Movies"
         case "popular":
             return "Popular"
@@ -206,11 +212,11 @@ struct ExplanationFactorCard: View {
     
     private var factorColor: Color {
         switch factor.type {
-        case "genre_match":
+        case "genre_match", "genre_affinity":
             return Color(hex: "f59e0b")
         case "friend_activity":
             return Color(hex: "3b82f6")
-        case "similar_movies":
+        case "similar_movies", "item_similarity":
             return Color(hex: "10b981")
         case "popular":
             return Color(hex: "f97316")
@@ -220,8 +226,6 @@ struct ExplanationFactorCard: View {
     }
 }
 
-// MARK: - color extension
-
 extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -229,11 +233,11 @@ extension Color {
         Scanner(string: hex).scanHexInt64(&int)
         let a, r, g, b: UInt64
         switch hex.count {
-        case 3: // rgb 12-bit
+        case 3:
             (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // rgb 24-bit
+        case 6:
             (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // argb 32-bit
+        case 8:
             (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default:
             (a, r, g, b) = (255, 0, 0, 0)
@@ -243,7 +247,6 @@ extension Color {
             red: Double(r) / 255,
             green: Double(g) / 255,
             blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
+            opacity: Double(a) / 255)
     }
 }

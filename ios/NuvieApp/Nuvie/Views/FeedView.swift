@@ -9,6 +9,7 @@ import SwiftUI
 
 struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
+    @State private var showUpdateBanner = false
         
         // grid columns. based on device size
         private var recommendedColumns: [GridItem] {
@@ -38,18 +39,21 @@ struct FeedView: View {
             if viewModel.isLoading {
                         FeedSkeletonView()
             } else if viewModel.showError {
-                if let error = viewModel.error {
+                if let error = viewModel.error, error == .aiServiceError {
+                    AIServiceErrorView(onRetry: viewModel.loadFeed)
+                } else if let error = viewModel.error {
                     EnhancedErrorView(error: error, onRetry: viewModel.loadFeed)
                 } else {
                     ErrorStateView(onRetry: viewModel.loadFeed)
                 }
                     } else {
-                        ScrollView {
-                            VStack(spacing: 32) {
-                                // hero section
-                                HeroSection()
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 24)
+                        ZStack(alignment: .top) {
+                            ScrollView {
+                                VStack(spacing: 32) {
+                                    // hero section
+                                    HeroSection()
+                                        .padding(.horizontal, 16)
+                                        .padding(.top, 24)
                                 
                                 // recommended for you
                                 if viewModel.recommendations.isEmpty {
@@ -58,7 +62,7 @@ struct FeedView: View {
                                     })
                                     .padding(.horizontal, 16)
                                 } else {
-                                    RecommendedSection(recommendations: viewModel.recommendations)
+                                    RecommendedSection(recommendations: viewModel.recommendations, isColdStart: viewModel.isColdStart, viewModel: viewModel)
                                         .padding(.horizontal, 16)
                                 }
                                 
@@ -80,6 +84,14 @@ struct FeedView: View {
                                 }
                             }
                             .padding(.bottom, 16)
+                            }
+                            .padding(.top, showUpdateBanner ? 60 : 0)
+                        }
+                        
+                        if showUpdateBanner {
+                            ModelUpdateBanner()
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                                .zIndex(1)
                         }
                     }
                 }
@@ -88,6 +100,28 @@ struct FeedView: View {
                 }
                 .refreshable {
                     await viewModel.refreshFeed()
+                    withAnimation {
+                        showUpdateBanner = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation {
+                            showUpdateBanner = false
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshFeed"))) { _ in
+                    withAnimation {
+                        showUpdateBanner = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation {
+                            showUpdateBanner = false
+                        }
+                    }
+                }
+                .onLongPressGesture(minimumDuration: 2.0) {
+                    viewModel.debugSimulateError.toggle()
+                    viewModel.loadFeed()
                 }
             }
    
@@ -168,18 +202,19 @@ struct Badge: View {
 
 struct RecommendedSection: View {
     let recommendations: [Recommendation]
+    let isColdStart: Bool
+    let viewModel: FeedViewModel
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("🍿 Recommended For You")
+                Text(isColdStart ? "🍿 Popular on Nuvie" : "🍿 Recommended For You")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.white)
                 
                 Spacer()
                 
                 Button(action: {
-                    // navigate to see all
                 }) {
                     Text("See all")
                         .font(.system(size: 14))
@@ -192,8 +227,24 @@ struct RecommendedSection: View {
                 GridItem(.flexible(), spacing: 16),
                 GridItem(.flexible(), spacing: 16)
             ], spacing: 16) {
-                ForEach(recommendations.prefix(6)) { movie in
-                    MovieCard(movie: movie, compact: false)
+                ForEach(Array(recommendations.prefix(6).enumerated()), id: \.element.id) { index, movie in
+                    ZStack {
+                        MovieCard(
+                            movie: movie,
+                            compact: false,
+                            onRateMovie: { movieId, rating, movie in
+                                viewModel.rateMovie(id: movieId, rating: rating, movie: movie)
+                            }
+                        )
+                        
+                        if viewModel.isRefreshingRecommendations && index == recommendations.prefix(6).count - 1 {
+                            Color.black.opacity(0.3)
+                                .overlay(
+                                    ProgressView()
+                                        .tint(Color(hex: "f59e0b"))
+                                )
+                        }
+                    }
                 }
             }
         }
@@ -269,6 +320,34 @@ struct ActivitySection: View {
 }
 
 // MARK: - error state
+
+struct ModelUpdateBanner: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16))
+                .foregroundColor(Color(hex: "f59e0b"))
+            
+            Text("Feed Updated based on your recent activity")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(hex: "f59e0b").opacity(0.9),
+                    Color(hex: "d97706").opacity(0.9)
+                ]),
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+    }
+}
 
 struct ErrorStateView: View {
     let onRetry: () -> Void

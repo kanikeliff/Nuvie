@@ -265,10 +265,44 @@ struct AIServiceErrorView: View {
     let onRetry: () -> Void
     
     var body: some View {
-        EnhancedErrorView(
-            error: .aiServiceError,
-            onRetry: onRetry
-        )
+        VStack(spacing: 24) {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.system(size: 64))
+                .foregroundColor(Color(hex: "f59e0b").opacity(0.6))
+            
+            VStack(spacing: 12) {
+                Text("Our AI is having a coffee break")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                
+                Text("Showing trending movies instead")
+                    .font(.system(size: 16))
+                    .foregroundColor(Color(hex: "94a3b8"))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 32)
+            
+            Button(action: onRetry) {
+                Text("Retry")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 200, height: 44)
+                    .background(
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                Color(hex: "f59e0b"),
+                                Color(hex: "d97706")
+                            ]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .padding(.top, 8)
+        }
+        .padding(32)
     }
 }
 

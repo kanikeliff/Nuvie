@@ -13,10 +13,12 @@ struct MovieCard: View {
     @State private var isHovered = false
     @State private var showExplanationSheet = false
     @State private var showRatingView = false
-    
-    init(movie: Recommendation, compact: Bool = false) {
+    var onRateMovie: ((Int, Int, Recommendation) -> Void)?
+      
+    init(movie: Recommendation, compact: Bool = false, onRateMovie: ((Int, Int, Recommendation) -> Void)? = nil) {
         self.movie = movie
         self.compact = compact
+        self.onRateMovie = onRateMovie
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -62,9 +64,18 @@ struct MovieCard: View {
                         }
                     }
                     
-                    // title and metadata. standard cards only
                     if !compact {
                         VStack(alignment: .leading, spacing: 4) {
+                            if let friendActivity = movie.friend_activity, !friendActivity.isEmpty {
+                                SocialBadgeView(friendActivity: friendActivity)
+                                    .padding(.bottom, 4)
+                            }
+                            
+                            if let watchedBy = movie.watchedBy, !watchedBy.isEmpty {
+                                SocialAvatarStack(users: watchedBy)
+                                    .padding(.bottom, 4)
+                            }
+                            
                             Text(movie.title)
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundColor(.white)
@@ -102,7 +113,6 @@ struct MovieCard: View {
                         }
                 )
                 .onTapGesture {
-                    // navigate to movie detail. todo: implement
                 }
                 .sheet(isPresented: $showExplanationSheet) {
                     if let explanation = movie.explanation {
@@ -117,8 +127,10 @@ struct MovieCard: View {
                     RatingView(
                         movie: movie,
                         isPresented: $showRatingView,
-                        onRatingSubmitted: {
-                            // refresh feed after rating
+                        onRatingSubmitted: { newRating in
+                            if let onRate = onRateMovie {
+                                onRate(movie.movie_id, newRating, movie)
+                            }
                             NotificationCenter.default.post(name: NSNotification.Name("RefreshFeed"), object: nil)
                         }
                     )
@@ -164,8 +176,7 @@ struct MovieCard: View {
                         if let socialScore = movie.social_score {
                             SocialScoreBadge(score: socialScore)
                         }
-                        // explanation badge. phase 3
-                        if let explanation = movie.explanation {
+                        if let explanation = movie.explanation, let reasonType = explanation.reason_type, !reasonType.isEmpty {
                             ExplanationBadge(explanation: explanation, showSheet: $showExplanationSheet)
                         }
                     }

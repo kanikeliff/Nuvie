@@ -16,7 +16,7 @@ struct RatingView: View {
     @State private var isSubmitting: Bool = false
     @State private var showSuccess: Bool = false
     
-    var onRatingSubmitted: (() -> Void)?
+    var onRatingSubmitted: ((Int) -> Void)?
     
     var body: some View {
         NavigationView {
@@ -169,11 +169,10 @@ struct RatingView: View {
     
     private func submitRating() {
         isSubmitting = true
+        onRatingSubmitted?(selectedRating)
         
-        // todo: call api to submit rating
-        // for now, simulate api call
         Task {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            try? await Task.sleep(nanoseconds: 500_000_000)
             
             await MainActor.run {
                 isSubmitting = false

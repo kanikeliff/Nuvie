@@ -49,7 +49,10 @@ struct Recommendation: Codable, Identifiable {
     let social_score: Int?
     let explanation: Explanation?
     let friend_ratings: FriendRatings?
-    let user_rating: Int? 
+    let friend_activity: [FriendAction]?
+    let watchedBy: [User]?
+    let user_rating: Int?
+    let overview: String?
     
     var id: Int { movie_id }
     
@@ -64,6 +67,8 @@ struct Recommendation: Codable, Identifiable {
 
 struct Explanation: Codable {
     let primary_reason: String
+    let reason_type: String?
+    let reason_context: String?
     let confidence: Double
     let factors: [ExplanationFactor]
 }
@@ -87,4 +92,27 @@ struct FriendRating: Codable {
     let name: String
     let avatar_url: String?
     let rating: Int
+}
+
+struct FriendAction: Codable, Identifiable {
+    let user_id: Int
+    let name: String
+    let avatar_url: String?
+    let action_type: FriendActionType
+    
+    var id: Int { user_id }
+}
+
+enum FriendActionType: String, Codable {
+    case liked
+    case watched
+    case rated
+}
+
+struct User: Codable, Identifiable {
+    let user_id: Int
+    let name: String
+    let avatar_url: String?
+    
+    var id: Int { user_id }
 }
