@@ -80,6 +80,7 @@ struct MovieCard: View {
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             
                             HStack(spacing: 4) {
                                 if let year = movie.year {
@@ -94,6 +95,7 @@ struct MovieCard: View {
                                     .font(.system(size: 12))
                                     .foregroundColor(Color(hex: "94a3b8"))
                                     .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
                             }
                         }
                         .padding(.top, 8)
@@ -265,9 +267,9 @@ struct MovieCard: View {
                     showRating = true
                 }) {
                     Image(systemName: "paperplane.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: 16)) // Slightly larger icon
                         .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44) // Increased touch target
                         .background(
                             LinearGradient(
                                 gradient: Gradient(colors: [

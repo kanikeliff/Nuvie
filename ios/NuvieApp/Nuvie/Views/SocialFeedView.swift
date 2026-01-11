@@ -28,6 +28,8 @@ struct SocialFeedView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 16)
+                    .animation(.easeInOut, value: viewModel.activities)
+                    .scrollDismissesKeyboard(.immediately)
                 }
             }
         }
@@ -49,20 +51,22 @@ struct FriendActivityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                AsyncImage(url: URL(string: activity.user_avatar ?? "")) { phase in
-                    switch phase {
-                    case .empty, .failure:
-                        AvatarPlaceholder()
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    @unknown default:
-                        AvatarPlaceholder()
+                NavigationLink(destination: UserProfileView(user: User(user_id: activity.user_id, name: activity.user_name, avatar_url: activity.user_avatar))) {
+                    AsyncImage(url: URL(string: activity.user_avatar ?? "")) { phase in
+                        switch phase {
+                        case .empty, .failure:
+                            AvatarPlaceholder()
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        @unknown default:
+                            AvatarPlaceholder()
+                        }
                     }
+                    .frame(width: 44, height: 44)
+                    .clipShape(Circle())
                 }
-                .frame(width: 44, height: 44)
-                .clipShape(Circle())
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(activity.user_name)

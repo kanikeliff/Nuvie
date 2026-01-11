@@ -14,6 +14,11 @@ final class FeedViewModel: ObservableObject {
     @Published var recommendations: [Recommendation] = []
     @Published var trendingMovies: [Recommendation] = []
     @Published var activities: [Activity] = []
+    
+    // Demo Mode Flags
+    var useMockData: Bool { DemoConfig.shared.useMockData }
+    var forceSocialData: Bool { DemoConfig.shared.forceSocialData }
+    var simulateLatency: Bool { DemoConfig.shared.simulateNetworkLatency }
 
     @Published var isLoading: Bool = true
     @Published var showError: Bool = false
@@ -39,23 +44,31 @@ final class FeedViewModel: ObservableObject {
         showError = false
 
         Task {
-            if debugSimulateError {
-                try await Task.sleep(nanoseconds: 500_000_000)
-                self.isLoading = false
-                self.showError = true
-                self.error = .aiServiceError
-                return
-            }
-            
             do {
-                let trending = try APIClient.shared.fetchMockTrending()
-                let activity = try APIClient.shared.fetchMockActivities()
+                // APIClient now handles Demo Mode & Latency internally
+                // We just need to call the appropriate methods
+                
+                let trending: FeedResponse
+                let activity: ActivityFeedResponse
+                let feed: FeedResponse
+                
+                if DemoConfig.isDemoMode {
+                    // Force mock data path
+                    trending = try await APIClient.shared.fetchMockTrending()
+                    activity = try await APIClient.shared.fetchMockActivities()
+                    feed = try await APIClient.shared.fetchMockFeed()
+                } else {
+                    // Real API path (currently falls back to mocks in APIClient if not implemented)
+                    trending = try await APIClient.shared.fetchMockTrending()
+                    activity = try await APIClient.shared.fetchMockActivities()
+                    feed = try await APIClient.shared.fetchMockFeed()
+                }
                 
                 if ratingsCount == 0 {
                     self.isColdStart = true
                     var processedTrending = MockDataGenerator.injectFriendActivity(into: trending.recommendations)
                     
-                    if enableMockSocialData {
+                    if forceSocialData {
                         processedTrending = MockDataGenerator.injectWatchedBy(into: processedTrending)
                     }
                     
@@ -63,12 +76,11 @@ final class FeedViewModel: ObservableObject {
                     self.trendingMovies = processedTrending
                 } else {
                     self.isColdStart = false
-                    let feed = try APIClient.shared.fetchMockFeed()
                     
                     var processedRecommendations = MockDataGenerator.injectFriendActivity(into: feed.recommendations)
                     var processedTrending = MockDataGenerator.injectFriendActivity(into: trending.recommendations)
                     
-                    if enableMockSocialData {
+                    if forceSocialData {
                         processedRecommendations = MockDataGenerator.injectWatchedBy(into: processedRecommendations)
                         processedTrending = MockDataGenerator.injectWatchedBy(into: processedTrending)
                     }
@@ -80,21 +92,10 @@ final class FeedViewModel: ObservableObject {
                 self.activities = activity.activities
 
                 self.isLoading = false
-                self.showError = false
-                self.error = nil
             } catch {
                 self.isLoading = false
                 self.showError = true
-                if let apiError = error as? APIError {
-                    switch apiError {
-                    case .fileNotFound:
-                        self.error = .networkError
-                    case .decoding:
-                        self.error = .internalError
-                    }
-                } else {
-                    self.error = .networkError
-                }
+                self.error = .networkError
             }
         }
     }
@@ -144,16 +145,16 @@ final class FeedViewModel: ObservableObject {
         
         Task {
             do {
+                // Simulate processing time
                 try await Task.sleep(nanoseconds: 500_000_000)
                 
                 isRefreshingRecommendations = true
                 
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                
-                let feed = try APIClient.shared.fetchMockFeed()
+                // Fetch new feed with natural latency
+                let feed = try await APIClient.shared.fetchMockFeed()
                 var processedRecommendations = MockDataGenerator.injectFriendActivity(into: feed.recommendations)
                 
-                if enableMockSocialData {
+                if forceSocialData {
                     processedRecommendations = MockDataGenerator.injectWatchedBy(into: processedRecommendations)
                 }
                 

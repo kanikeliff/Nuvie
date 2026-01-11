@@ -57,16 +57,27 @@ extension APIClient {
 
     // MARK: - Mock fetchers (Phase 2)
 
-    func fetchMockFeed() throws -> FeedResponse {
-        try loadJSON("mock_feed", as: FeedResponse.self)
+    // MARK: - Mock fetchers
+    
+    func fetchMockFeed() async throws -> FeedResponse {
+        if DemoConfig.isDemoMode {
+            try? await Task.sleep(nanoseconds: DemoConfig.getRandomLatency())
+        }
+        return try loadJSON("mock_feed", as: FeedResponse.self)
     }
 
-    func fetchMockTrending() throws -> FeedResponse {
-        try loadJSON("mock_trending", as: FeedResponse.self)
+    func fetchMockTrending() async throws -> FeedResponse {
+        if DemoConfig.isDemoMode {
+            try? await Task.sleep(nanoseconds: DemoConfig.getRandomLatency())
+        }
+        return try loadJSON("mock_trending", as: FeedResponse.self)
     }
 
-    func fetchMockActivities() throws -> ActivityFeedResponse {
-        try loadJSON("mock_activities", as: ActivityFeedResponse.self)
+    func fetchMockActivities() async throws -> ActivityFeedResponse {
+        if DemoConfig.isDemoMode {
+            try? await Task.sleep(nanoseconds: DemoConfig.getRandomLatency())
+        }
+        return try loadJSON("mock_activities", as: ActivityFeedResponse.self)
     }
 }
 
