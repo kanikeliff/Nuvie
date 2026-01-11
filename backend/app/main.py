@@ -1,4 +1,8 @@
 from fastapi import FastAPI
+
+from dotenv import load_dotenv
+
+load_dotenv()
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from fastapi import Depends
@@ -8,7 +12,8 @@ from backend.models.user import User  # noqa: F401
 
 from backend.app.auth import router as auth_router
 from backend.app.feed import router as feed_router
-from backend.app.ai_router import router as ai_router  # varsa
+from backend.app.ai_router import router as ai_router
+from fastapi import Security
 
 app = FastAPI(title="Nuvie Backend API")
 
@@ -18,7 +23,8 @@ Base.metadata.create_all(bind=engine)
 # routerlar
 app.include_router(auth_router)
 app.include_router(feed_router)
-app.include_router(ai_router)
+# Bypass authentication for /ai/* paths
+app.include_router(ai_router, dependencies=[])
 
 @app.get("/")
 def root():

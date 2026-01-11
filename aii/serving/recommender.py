@@ -132,3 +132,8 @@ def recommend_for_user(
                 continue
 
     return normalized
+
+
+def ai_status() -> dict:
+    """Return a small status dict for health endpoints."""
+    return {"ready": bool(_model_ready)}
