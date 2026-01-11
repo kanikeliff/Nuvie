@@ -1,4 +1,6 @@
-# --- Backend ---
+# =========================
+# Backend (API & Auth)
+# =========================
 fastapi
 uvicorn
 
@@ -8,12 +10,27 @@ email-validator
 sqlalchemy
 psycopg
 
-python-jose[cryptography]
-passlib[bcrypt]
+python-jose[cryptography]==3.3.0
+
+passlib==1.7.4
+bcrypt==3.2.2
+
 requests
 
-# --- AI / ML ---
+
+# =========================
+# AI / ML Core
+# =========================
 numpy>=1.25
 pandas>=2.0
 scipy
-scikit-learn
+
+# scikit-learn: compatible & stable
+scikit-learn>=1.2,<2.0
+
+
+# =========================
+# (OPTIONAL / HEAVY)
+# =========================
+# TensorFlow (CPU)
+tensorflow>=2.12,<3.0
