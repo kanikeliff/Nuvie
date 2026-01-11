@@ -1,3 +1,19 @@
-pandas>=2.0
+# --- Backend ---
+fastapi
+uvicorn
+
+pydantic>=2.5
+email-validator
+
+sqlalchemy
+psycopg
+
+python-jose[cryptography]
+passlib[bcrypt]
+requests
+
+# --- AI / ML ---
 numpy>=1.25
-pytest>=7.0
+pandas>=2.0
+scipy
+scikit-learn
