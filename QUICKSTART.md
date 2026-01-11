@@ -11,6 +11,18 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-ml.txt  # Optional: ML packages
 ```
 
+## 0. Setup Database
+
+Create environment file and setup database:
+
+```bash
+cp infra/env.example .env
+# Edit .env and set your DATABASE_URL (e.g., Neon PostgreSQL)
+python setup_database.py
+```
+
+This will create all required tables (users, movies, ratings, watch_events, recommendation_feed) and load MovieLens data.
+
 ## 1. Build Processed Dataset
 
 Run the feature pipeline to prepare MovieLens data:

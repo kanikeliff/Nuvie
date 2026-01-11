@@ -164,8 +164,26 @@ We actively use **Notion** for:
 ```bash
 git clone https://github.com/your-username/nuvie.git
 cd nuvie
+
+# Setup environment
 cp infra/env.example .env
-docker-compose up --build
+# Edit .env with your DATABASE_URL and other settings
+
+# Install dependencies
+python -m pip install -r requirements.txt
+
+# Setup database and load data
+python setup_database.py
+
+# Optional: Build processed dataset
+python -m aii.features.feature_pipeline
+
+# Run AI service
+export AI_INTERNAL_TOKEN="dev-internal-token"
+uvicorn aii.serving.app:app --reload --port 9000
+
+# Run backend (in another terminal)
+uvicorn backend.app.main:app --reload --port 8000
 ```
 
 Backend will be available at:
