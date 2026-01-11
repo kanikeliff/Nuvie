@@ -1,32 +1,36 @@
+# backend/app/auth.py (DEMO MODE)
+
 import os
-import uuid
 from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt, JWTError
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy.orm import Session
-
-from backend.models.user import User
-from backend.session import get_db
-from .auth_utils import hash_password, verify_password
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+# JWT settings (demo-friendly)
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
 JWT_ALGO = "HS256"
 JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "60"))
+
+# Demo user defaults (you can change these)
+DEMO_USER_ID = os.getenv("DEMO_USER_ID", "demo-user-123")
+DEMO_USER_EMAIL = os.getenv("DEMO_USER_EMAIL", "demo@nuvie.app")
 
 
 # -----------------------
 # Schemas (Pydantic)
 # -----------------------
 class AuthIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=1, max_length=72)  # bcrypt limit: 72 bytes (we enforce it)
+    # NOTE: We keep "email" as plain str to avoid email-validator dependency issues in demo.
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=72)
+
 
 class TokenOut(BaseModel):
     access_token: str
@@ -34,62 +38,64 @@ class TokenOut(BaseModel):
 
 
 # -----------------------
-# Routes
+# Routes (DEMO)
 # -----------------------
 @router.post("/register")
-def register(user_data: AuthIn, db: Session = Depends(get_db)):
-    # user_data.password is now guaranteed to be a short string
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    hashed_password = hash_password(user_data.password)
-
-    new_user = User(
-        id=str(uuid.uuid4()),
-        email=user_data.email,
-        password_hash=hashed_password,
-    )
-
-    db.add(new_user)
-    db.commit()
-
-    return {"message": "User registered successfully"}
+def register(user_data: AuthIn):
+    """
+    DEMO MODE:
+    - No database write
+    - Always returns success
+    """
+    return {
+        "message": "✅ Demo register ok (DB disabled)",
+        "user": {
+            "id": DEMO_USER_ID,
+            "email": user_data.email,
+        },
+    }
 
 
 @router.post("/login", response_model=TokenOut)
-def login(user_data: AuthIn, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_data.email).first()
-
-    if not user or not verify_password(user_data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
+def login(user_data: AuthIn):
+    """
+    DEMO MODE:
+    - No DB check
+    - Always returns a JWT with sub=DEMO_USER_ID
+    """
     exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRES_MINUTES)
-    payload = {"sub": str(user.id), "exp": exp}
-
+    payload = {
+        "sub": DEMO_USER_ID,
+        "email": user_data.email,
+        "exp": exp,
+        "demo": True,
+    }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
     return {"access_token": token, "token_type": "bearer"}
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
+    """
+    DEMO MODE:
+    - If Authorization: Bearer <jwt> exists -> decode and return user from token
+    - If no token -> return demo user anyway (so /feed/home works without login)
+    """
+
+    # If no token provided, allow demo user
     if credentials is None or not credentials.credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+        return {"id": DEMO_USER_ID, "email": DEMO_USER_EMAIL}
 
     token = credentials.credentials
-
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user_id = payload.get("sub") or DEMO_USER_ID
+        email = payload.get("email") or DEMO_USER_EMAIL
+        return {"id": str(user_id), "email": str(email)}
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-    return {"id": str(user.id), "email": user.email}
+        # In demo, you can either:
+        # 1) reject invalid token, OR
+        # 2) fallback to demo user.
+        # I'll fallback to demo user to keep demo smooth.
+        return {"id": DEMO_USER_ID, "email": DEMO_USER_EMAIL}
