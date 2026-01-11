@@ -1,18 +1,17 @@
+"""
+Feed API - Home feed with AI recommendations + DB fallback
+"""
+from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
-# I import DB dependency so I can query the database when needed
 from backend.session import get_db
+from backend.app.auth import get_current_user
 
-# I import auth from the same folder (backend/app) so Python finds it correctly
-from .auth import get_current_user
+# Direct AI import (same service - no HTTP calls)
+from aii.serving.recommender import recommend_for_user
 
-# I import AI client so I can ask the AI service for recommendations (Phase 3)
-from .ai_client import get_ai_recommendations
-
-
-# I create a router for feed-related endpoints
 router = APIRouter(
     prefix="/feed",
     tags=["Feed"]
@@ -20,7 +19,7 @@ router = APIRouter(
 
 
 def safe_year(release_date):
-    # I extract the year safely so the API never crashes on missing / weird dates
+    """Extract year safely so API never crashes on missing dates."""
     if not release_date:
         return None
     try:
@@ -36,64 +35,107 @@ def home_feed(
     user = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # I keep user_id as a string because JWT / user ids are usually strings (uuid, etc.)
-    user_id = user["id"]
+    """
+    Home feed endpoint.
+    1. Try AI recommendations first
+    2. If AI fails/empty, fallback to DB popular movies
+    """
+    # JWT user IDs are usually strings, but IBCF expects int
+    # Assuming auth system uses integer user IDs
+    try:
+        user_id = int(user["id"])
+    except (KeyError, TypeError, ValueError):
+        # If user_id is UUID/string, this will fail
+        # In that case, we need a mapping table
+        user_id = None
 
     # ----------------------------
-    # Phase 3: Try AI first
+    # AI First
     # ----------------------------
     try:
-        # I call the AI service to get personalized recommendations
-        # I pass user_id, limit, offset so AI can paginate too
-        items = get_ai_recommendations(
-            user_id=user_id,
-            limit=limit,
-            offset=offset
-        )
+        if user_id is not None:
+            ai_items = recommend_for_user(
+                user_id=user_id,
+                limit=limit,
+                offset=offset,
+            )
 
-        # I return AI items directly if AI succeeds
-        return {
-            "user_id": user_id,
-            "items": items,
-            "next_offset": offset + limit,
-            "source": "ai"
-        }
+            if ai_items:
+                # AI gives movie_id -> join with DB for full details
+                movie_ids = [it["movie_id"] for it in ai_items]
 
-    except Exception:
-        # ----------------------------
-        # Phase 2 fallback: DB feed
-        # ----------------------------
+                rows = db.execute(
+                    text("""
+                        SELECT movie_id, title, poster_url, overview, release_date
+                        FROM movies
+                        WHERE movie_id = ANY(:ids)
+                    """),
+                    {"ids": movie_ids}
+                ).mappings().all()
 
-        # I query movies from the database
-        # because Phase 2 only requires a simple feed (no personalization yet)
-        rows = db.execute(
-            text("""
-                SELECT movie_id, title, poster_url, overview, release_date
-                FROM movies
-                ORDER BY movie_id
-                LIMIT :limit OFFSET :offset
-            """),
-            {"limit": limit, "offset": offset}
-        ).mappings().all()
+                # Build lookup map
+                by_id = {r["movie_id"]: r for r in rows}
 
-        # I transform database rows into a JSON-friendly structure
-        items = []
-        for row in rows:
-            items.append({
-                "movie_id": row["movie_id"],
-                "title": row["title"],
-                "year": safe_year(row.get("release_date")),
-                "poster_url": row["poster_url"],
-                "overview": row["overview"],
-                "release_date": row["release_date"],
-                # I keep this simple in fallback mode
-                "reason_chips": ["DB fallback (AI failed)"]
-            })
+                items = []
+                for it in ai_items:
+                    mid = it["movie_id"]
+                    m = by_id.get(mid)
+                    if not m:
+                        continue
+                    items.append({
+                        "movie_id": mid,
+                        "title": m["title"],
+                        "year": safe_year(m.get("release_date")),
+                        "poster_url": m["poster_url"],
+                        "overview": m["overview"],
+                        "release_date": m["release_date"],
+                        "ai_score": it.get("ai_score", 50),
+                        "social_score": it.get("social_score", 0),
+                        "reason_chips": [it.get("reason", "AI recommendation")],
+                    })
 
-        # I return the feed data along with pagination info
-        return {
-            "user_id": user_id,
-            "items": items,
-            "next_offset": offset + limit,
-            "source": "db_fallback"
-        }
+                return {
+                    "user_id": user_id,
+                    "items": items,
+                    "next_offset": offset + limit,
+                    "source": "ai"
+                }
+
+        # AI failed or no user_id -> fall through to DB fallback
+
+    except Exception as e:
+        # Log error but continue to fallback
+        print(f"[feed] AI failed: {repr(e)}")
+
+    # ----------------------------
+    # DB Fallback: Popular movies
+    # ----------------------------
+    rows = db.execute(
+        text("""
+            SELECT movie_id, title, poster_url, overview, release_date
+            FROM movies
+            ORDER BY movie_id
+            LIMIT :limit OFFSET :offset
+        """),
+        {"limit": limit, "offset": offset}
+    ).mappings().all()
+
+    items = []
+    for row in rows:
+        items.append({
+            "movie_id": row["movie_id"],
+            "title": row["title"],
+            "year": safe_year(row.get("release_date")),
+            "poster_url": row["poster_url"],
+            "overview": row["overview"],
+            "release_date": row["release_date"],
+            "reason_chips": ["DB fallback"],
+        })
+
+    return {
+        "user_id": user_id,
+        "items": items,
+        "next_offset": offset + limit,
+        "source": "db_fallback"
+    }
+
