@@ -122,3 +122,8 @@ def get_current_user(
 
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+@router.get("/me")
+def me(user=Depends(get_current_user)):
+    return user
+
