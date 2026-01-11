@@ -1,9 +1,0 @@
-# scikit-learn: pinned to a compatible minor range
-scikit-learn>=1.2,<2.0
-
-# TensorFlow: pinned safe minor range (pure PyPI install on most platforms)
-tensorflow>=2.12,<3.0
-
-# PyTorch: we DO NOT pin a single wheel here because CPU/CUDA and OS
-# combos require platform-specific wheels. Install PyTorch using the
-# official selector in the README below (example commands are provided there).
