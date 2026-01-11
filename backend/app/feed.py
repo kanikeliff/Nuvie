@@ -9,7 +9,7 @@ from backend.session import get_db
 from .auth import get_current_user
 
 # I import AI client so I can ask the AI service for recommendations (Phase 3)
-from .ai_client import get_ai_recommendations
+from aii.serving.recommender import recommend_for_user
 
 
 # I create a router for feed-related endpoints
@@ -43,21 +43,47 @@ def home_feed(
     # Phase 3: Try AI first
     # ----------------------------
     try:
-        # I call the AI service to get personalized recommendations
-        # I pass user_id, limit, offset so AI can paginate too
-        items = get_ai_recommendations(
-            user_id=user_id,
-            limit=limit,
-            offset=offset
-        )
+        # Use local AI recommender (no external POST)
+        ai_items = recommend_for_user(user_id=user_id, top_k=limit, offset=offset)
 
-        # I return AI items directly if AI succeeds
-        return {
-            "user_id": user_id,
-            "items": items,
-            "next_offset": offset + limit,
-            "source": "ai"
-        }
+        if ai_items:
+            # fetch movie details from DB for each movie_id returned by AI
+            ids = [int(it["movie_id"]) for it in ai_items]
+            rows = db.execute(
+                text(
+                    """
+                    SELECT movie_id, title, poster_url, overview, release_date
+                    FROM movies
+                    WHERE movie_id IN :ids
+                    """
+                ),
+                {"ids": tuple(ids)}
+            ).mappings().all()
+
+            movie_map = {r["movie_id"]: r for r in rows}
+
+            items = []
+            for it in ai_items:
+                mid = int(it["movie_id"])
+                row = movie_map.get(mid)
+                if not row:
+                    continue
+                items.append({
+                    "movie_id": row["movie_id"],
+                    "title": row["title"],
+                    "year": safe_year(row.get("release_date")),
+                    "poster_url": row["poster_url"],
+                    "overview": row["overview"],
+                    "release_date": row["release_date"],
+                    "reason_chips": [it.get("explanation", {}).get("primary_reason", "ai")],
+                })
+
+            return {
+                "user_id": user_id,
+                "items": items,
+                "next_offset": offset + limit,
+                "source": "ai",
+            }
 
     except Exception:
         # ----------------------------
