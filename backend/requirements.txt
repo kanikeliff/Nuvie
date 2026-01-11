@@ -1,11 +1,9 @@
 fastapi
 uvicorn
 pydantic>=2.5
-email-validator
 sqlalchemy
 psycopg
-python-jose[cryptography]
-passlib[bcrypt]
-requests
+python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-jose==3.3.0
+requests
+email-validator
