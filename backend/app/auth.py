@@ -1,5 +1,9 @@
 import os
 import uuid
+import traceback
+import logging
+from typing import Any, Dict
+from pydantic import BaseModel, EmailStr
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,13 +12,20 @@ from sqlalchemy.orm import Session
 from backend.session import get_db
 from backend.models.user import User
 from backend.app.security import (
-    hash_password,
+    get_password_hash,
     verify_password,
     create_access_token,
     decode_token,
 )
 
-from backend.app.schemas import RegisterRequest, LoginRequest, TokenResponse, UserPublic
+from backend.app.schemas import LoginRequest, TokenResponse, UserPublic
+
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+
+print("AUTH.PY LOADED")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=True)
@@ -23,28 +34,48 @@ def demo_mode_on() -> bool:
     v = os.getenv("DEMO_MODE", "").strip().lower()
     return v in {"1", "true", "yes", "on"}
 
-@router.post("/register", response_model=UserPublic)
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    # DEMO kapalı olmalı
-    if demo_mode_on():
-        return {"id": "demo-user-123", "email": str(req.email)}
+@router.post("/register")
+def register(body: RegisterIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    try:
+        # DEMO kapalı olmalı
+        if demo_mode_on():
+            return {"ok": True, "email": str(body.email)}
 
-    email = str(req.email).lower().strip()
+        # validate/normalize
+        email = str(body.email).lower().strip()
+        pw = str(body.password).strip()
 
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        # password byte-length check for bcrypt
+        if len(pw.encode("utf-8")) > 72:
+            raise HTTPException(status_code=400, detail="Password too long")
+        if len(pw) < 6:
+            raise HTTPException(status_code=400, detail="Password too short")
 
-    user = User(
-        id=str(uuid.uuid4()),
-        email=email,
-        password_hash=hash_password(req.password),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            # user exists -> 409 with JSON detail
+            raise HTTPException(status_code=409, detail={"error": "Email already registered"})
 
-    return {"id": user.id, "email": user.email}
+        user = User(
+            id=str(uuid.uuid4()),
+            email=email,
+            password_hash=get_password_hash(pw),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        return {"ok": True, "email": user.email}
+    except HTTPException:
+        # re-raise HTTPExceptions as-is
+        raise
+    except Exception as e:  # pragma: no cover - global safety
+        tb = traceback.format_exc()
+        # print stacktrace for debugging and log it
+        print(tb)
+        logging.exception("Unhandled exception in register endpoint")
+        # return a JSON-friendly 500
+        raise HTTPException(status_code=500, detail={"error": repr(e)})
 
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, db: Session = Depends(get_db)):

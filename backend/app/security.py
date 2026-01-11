@@ -9,11 +9,17 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 JWT_SECRET = os.getenv("JWT_SECRET", "change-me")
 JWT_ALG = "HS256"
 
-def hash_password(password: str) -> str:
+def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+
+def hash_password(password: str) -> str:
+    # backward-compatible alias
+    return get_password_hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(payload: dict, expires_minutes: int = 60) -> str:
     now = datetime.now(timezone.utc)

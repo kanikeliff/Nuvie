@@ -16,7 +16,10 @@ from backend.models.user import User  # noqa: F401
 from backend.app.auth import router as auth_router
 from backend.app.feed import router as feed_router
 from backend.app.ai_router import router as ai_router
-from fastapi import Security
+from fastapi import Security, Request
+from fastapi.responses import JSONResponse
+import traceback
+import logging
 
 app = FastAPI(title="Nuvie Backend API")
 
@@ -46,3 +49,15 @@ def db_ping(db: Session = Depends(get_db)):
     one = db.execute(text("SELECT 1")).scalar()
     users_exists = db.execute(text("SELECT to_regclass('public.users')")).scalar()
     return {"select_1": one, "users_table": users_exists}
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    # print and log traceback for debugging
+    print(tb)
+    logging.exception("Unhandled exception in application")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error": str(exc)},
+    )
