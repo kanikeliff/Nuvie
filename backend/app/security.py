@@ -19,6 +19,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # bcrypt only uses the first 72 bytes; passlib may raise for longer inputs.
+    # Treat too-long passwords as a simple verification failure.
+    if len(plain_password.encode("utf-8")) > 72:
+        return False
+
     return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(payload: dict, expires_minutes: int = 60) -> str:

@@ -84,11 +84,17 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         return {"access_token": token, "token_type": "bearer"}
 
     email = str(req.email).lower().strip()
+    pw = str(req.password).strip()
+
+    # password byte-length check for bcrypt
+    if len(pw.encode("utf-8")) > 72:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
     user = db.query(User).filter(User.email == email).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not verify_password(req.password, user.password_hash):
+    if not verify_password(pw, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     exp_min = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))

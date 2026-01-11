@@ -10,4 +10,7 @@ def hash_password(password: str) -> str:
 
 # I verify a plain password against the stored hash
 def verify_password(password: str, password_hash: str) -> bool:
+    if len(password.encode("utf-8")) > 72:
+        return False
+
     return pwd_context.verify(password, password_hash)
