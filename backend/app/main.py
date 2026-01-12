@@ -48,6 +48,3 @@ async def global_exception_handler(request: Request, exc: Exception):
     print(tb)
     logging.exception("Unhandled exception in application")
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
-
-from backend.app.routers.admin_backfill import router as admin_router
-app.include_router(admin_router)
