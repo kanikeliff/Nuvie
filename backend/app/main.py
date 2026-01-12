@@ -1,6 +1,7 @@
 # backend/app/main.py
 import logging
 import traceback
+from backend.models.movie import Movie  # noqa
 
 from dotenv import load_dotenv
 load_dotenv()
