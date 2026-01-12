@@ -112,7 +112,7 @@ def home_feed(
         from aii.serving.recommender import recommend_for_user  # type: ignore
 
         # your AI expects int user_id -> only if digits
-        if user_id_str.isdigit():
+        if True:
             ai_items = recommend_for_user(user_id=int(user_id_str), limit=limit, offset=offset) or []
     except Exception:
         ai_items = []
