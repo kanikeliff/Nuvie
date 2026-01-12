@@ -1,18 +1,19 @@
+# backend/app/feed.py
 import csv
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from backend.session import get_db
 from .auth import get_current_user
 
-# AI recommender (local module)
+# Local AI recommender
 from aii.serving.recommender import recommend_for_user
 
 
@@ -30,8 +31,8 @@ def safe_year(release_date: Optional[str]) -> Optional[int]:
 
 def user_to_int(user_id: str) -> int:
     """
-    Stable int from UUID/email etc.
-    We convert to 32-bit int using sha256 -> first 8 hex chars.
+    Stable int for any user_id (uuid/email/etc) so AI model can be called.
+    Returns 32-bit positive int.
     """
     h = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
     return int(h[:8], 16)
@@ -39,14 +40,19 @@ def user_to_int(user_id: str) -> int:
 
 def ensure_movies_table_seeded(db: Session) -> None:
     """
-    Ensure `movies` table exists and has at least basic rows.
-    Creates table if missing and seeds from aii/data/processed/movies.csv if available.
+    Ensure `movies` table exists; seed minimal rows from aii/data/processed/movies.csv if empty.
+    This avoids 500 errors on fresh DBs.
     """
     try:
         db.execute(text("SELECT 1 FROM movies LIMIT 1"))
-        db.commit()
+        return
     except OperationalError:
-        db.rollback()
+        # previous statement may have aborted transaction; rollback first
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
         db.execute(
             text(
                 """
@@ -62,21 +68,21 @@ def ensure_movies_table_seeded(db: Session) -> None:
         )
         db.commit()
 
-    # If already has rows, done
+    # Seed only if empty
     count = db.execute(text("SELECT COUNT(*) FROM movies")).scalar() or 0
     if int(count) > 0:
         return
 
     csv_path = Path(__file__).resolve().parents[2] / "aii" / "data" / "processed" / "movies.csv"
     if not csv_path.exists():
-        # No seed file available; leave empty but don't crash requests
+        logging.warning("movies.csv not found at %s; leaving movies table empty", csv_path)
         return
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
     with csv_path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for r in reader:
-            # movie_id + title is enough for demo
+            # keep it minimal; poster/overview can be null
             try:
                 rows.append(
                     {
@@ -104,28 +110,22 @@ def ensure_movies_table_seeded(db: Session) -> None:
 
 
 def fetch_movies_by_ids(db: Session, ids: List[int]) -> Dict[int, Dict[str, Any]]:
-    """
-    Returns a dict: movie_id -> row mappings
-    """
     if not ids:
         return {}
-
-    # Use tuple for IN
     rows = db.execute(
         text(
             """
             SELECT movie_id, title, poster_url, overview, release_date
             FROM movies
-            WHERE movie_id IN :ids
+            WHERE movie_id = ANY(:ids)
             """
         ),
-        {"ids": tuple(ids)},
+        {"ids": ids},
     ).mappings().all()
-
     return {int(r["movie_id"]): dict(r) for r in rows}
 
 
-@router.get("/")
+@router.get("")
 def feed_root(user=Depends(get_current_user)):
     return {"ok": True, "user": user.email, "items": []}
 
@@ -138,91 +138,105 @@ def home_feed(
     db: Session = Depends(get_db),
 ):
     user_id = str(user.id)
-    ensure_movies_table_seeded(db)
-
-    # ---------- AI PATH ----------
-    # Convert UUID/email user_id to stable int -> call AI model for recommendations
     uid_int = user_to_int(user_id)
 
+    # Make sure movies table exists
+    ensure_movies_table_seeded(db)
+
+    # ----------------------------
+    # Try AI first (always)
+    # ----------------------------
     try:
-        ai_items = recommend_for_user(user_id=uid_int, limit=limit, offset=offset)
+        ai_items = recommend_for_user(user_id=uid_int, limit=limit, offset=offset) or []
+        # expected shape: [{"movie_id": 123, "reason": "..."}...]
+        ids = []
+        for it in ai_items:
+            try:
+                ids.append(int(it["movie_id"]))
+            except Exception:
+                continue
 
-        # ai_items expected like: [{"movie_id": 123, "reason": "..."}...]
-        if ai_items:
-            ids = []
-            for it in ai_items:
-                try:
-                    ids.append(int(it["movie_id"]))
-                except Exception:
-                    continue
+        movie_map = fetch_movies_by_ids(db, ids)
 
-            movie_map = fetch_movies_by_ids(db, ids)
-
-            items = []
-            for it in ai_items:
-                try:
-                    mid = int(it["movie_id"])
-                except Exception:
-                    continue
-
-                row = movie_map.get(mid)
-                if not row:
-                    continue
-
-                items.append(
-                    {
-                        "movie_id": mid,
-                        "title": row.get("title"),
-                        "year": safe_year(row.get("release_date")),
-                        "poster_url": row.get("poster_url"),
-                        "overview": row.get("overview"),
-                        "release_date": row.get("release_date"),
-                        "reason_chips": [it.get("reason", "ai")],
-                    }
-                )
-
-            # If AI returned movie_ids but DB lacked details, still fall back
-            if items:
-                return {
-                    "user_id": user_id,
-                    "items": items,
-                    "next_offset": offset + limit,
-                    "source": "ai",
-                    "ai_user_int": uid_int,  # demo için debug (istersen kaldır)
+        items = []
+        for it in ai_items:
+            try:
+                mid = int(it["movie_id"])
+            except Exception:
+                continue
+            row = movie_map.get(mid)
+            if not row:
+                continue
+            items.append(
+                {
+                    "movie_id": mid,
+                    "title": row.get("title"),
+                    "year": safe_year(row.get("release_date")),
+                    "poster_url": row.get("poster_url"),
+                    "overview": row.get("overview"),
+                    "release_date": row.get("release_date"),
+                    "reason_chips": [it.get("reason", "ai")],
                 }
+            )
+
+        # If AI returned usable items -> success
+        if items:
+            return {
+                "user_id": user_id,
+                "items": items,
+                "next_offset": offset + limit,
+                "source": "ai",
+            }
 
     except Exception as e:
-        logging.exception("AI recommend_for_user failed, falling back to DB. Error=%s", repr(e))
-        # IMPORTANT: rollback if any DB transaction got upset
+        logging.exception("AI recommend_for_user failed: %r", e)
+        # if AI crashed mid-transaction, ensure DB is usable
         try:
             db.rollback()
         except Exception:
             pass
 
-    # ---------- DB FALLBACK ----------
-    rows = db.execute(
-        text(
-            """
-            SELECT movie_id, title, poster_url, overview, release_date
-            FROM movies
-            ORDER BY movie_id
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        {"limit": limit, "offset": offset},
-    ).mappings().all()
+    # ----------------------------
+    # Fallback: DB feed
+    # ----------------------------
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT movie_id, title, poster_url, overview, release_date
+                FROM movies
+                ORDER BY movie_id
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"limit": limit, "offset": offset},
+        ).mappings().all()
+    except SQLAlchemyError:
+        # In case transaction got aborted earlier
+        db.rollback()
+        rows = db.execute(
+            text(
+                """
+                SELECT movie_id, title, poster_url, overview, release_date
+                FROM movies
+                ORDER BY movie_id
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"limit": limit, "offset": offset},
+        ).mappings().all()
 
     items = []
     for row in rows:
         items.append(
             {
                 "movie_id": int(row["movie_id"]),
-                "title": row.get("title"),
+                "title": row["title"],
                 "year": safe_year(row.get("release_date")),
                 "poster_url": row.get("poster_url"),
                 "overview": row.get("overview"),
                 "release_date": row.get("release_date"),
-                "reason_chips": ["DB fallback (AI skipped/failed)"],
+                "reason_chips": ["DB fallback"],
             }
         )
 
@@ -231,13 +245,12 @@ def home_feed(
         "items": items,
         "next_offset": offset + limit,
         "source": "db_fallback",
-        "ai_user_int": uid_int,  # demo için debug (istersen kaldır)
     }
 
 
-# iOS'ın çağırdığı path'ler varsa, map edelim (Not Found olmasın)
+# ✅ Production-friendly aliases for iOS (backward compatible)
 @router.get("/recommendations")
-def recommendations(
+def recommendations_alias(
     limit: int = 20,
     offset: int = 0,
     user=Depends(get_current_user),
@@ -247,5 +260,6 @@ def recommendations(
 
 
 @router.get("/activities")
-def activities(user=Depends(get_current_user)):
-    return {"user": user.email, "items": []}
+def activities_alias(user=Depends(get_current_user)):
+    # If iOS expects this, return a stable response (can be expanded later)
+    return {"ok": True, "user": user.email, "activities": []}
