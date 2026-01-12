@@ -5,6 +5,8 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from tmdbv3api import Search, TMDb
 
+print("DEBUG enrich_movies loaded", __file__)
+
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.environ.get("DATABASE_URL")
