@@ -1,394 +1,281 @@
+# aii/evaluation/offline_metrics.py
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+import json
 import os
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from aii.models.ibcf import IBCFRecommender, ModelConfig
+
 
 @dataclass
-class ModelConfig:
-    processed_dir: str = "aii/data/processed"
-    ratings_csv: Optional[str] = None
-    movies_csv: Optional[str] = None
-    popular_csv: Optional[str] = None
-
-    min_user_history: int = 5
-    max_k: int = 50
-
-    # similarity build controls
-    min_common_raters: int = 2
-    topk_sim_per_item: int = 200
-
-    def __post_init__(self) -> None:
-        # derive CSV paths from processed_dir when not explicitly provided
-        if not self.ratings_csv:
-            self.ratings_csv = os.path.join(self.processed_dir, "ratings.csv")
-        if not self.movies_csv:
-            self.movies_csv = os.path.join(self.processed_dir, "movies.csv")
-        if not self.popular_csv:
-            self.popular_csv = os.path.join(self.processed_dir, "popular_movies.csv")
+class EvalResult:
+    rmse: float
+    rmse_n: int
+    recall_at_k: float
+    recall_users: int
+    k: int
+    test_rows: int
+    used_rows_for_rmse: int
+    skipped_rows_no_pred: int
 
 
-class IBCFRecommender:
+def _train_test_split_last_per_user(
+    ratings: pd.DataFrame,
+    min_train_ratings: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Baseline Item-Based CF:
-      - mean-center ratings per user
-      - compute item-item cosine similarity using co-rating dot products
-      - predict score(u,i) = sum_j sim(i,j)*r_u,j / sum_j |sim(i,j)|
+    Leave-one-out split per user using latest timestamp as test.
+    Only users with >= min_train_ratings + 1 total ratings are kept.
     """
+    df = ratings.copy()
+    df["user_id"] = df["user_id"].astype(int)
+    df["movie_id"] = df["movie_id"].astype(int)
+    df["rating"] = df["rating"].astype(float)
 
-    def __init__(self, cfg: ModelConfig):
-        self.cfg = cfg
+    # We assume timestamp exists (MovieLens style). If not, it still works by stable sort.
+    if "timestamp" in df.columns:
+        df["timestamp"] = df["timestamp"].astype(int)
+        df = df.sort_values(["user_id", "timestamp"], kind="mergesort")
+    else:
+        df = df.sort_values(["user_id"], kind="mergesort")
 
-        self.ratings: Optional[pd.DataFrame] = None
-        self.movies: Optional[pd.DataFrame] = None
-        self.popular: Optional[pd.DataFrame] = None
+    # Keep only users with enough ratings to have a meaningful train set
+    counts = df.groupby("user_id")["movie_id"].size()
+    good_users = counts[counts >= (min_train_ratings + 1)].index
+    df = df[df["user_id"].isin(good_users)]
 
-        # user_id -> [(movie_id, rating), ...]
-        self.user_hist: Dict[int, List[Tuple[int, float]]] = {}
+    # Last rating per user as test
+    last_idx = df.groupby("user_id").tail(1).index
+    test_df = df.loc[last_idx].copy()
+    train_df = df.drop(index=last_idx).copy()
 
-        # movie_id -> [(other_movie_id, sim, common_raters), ...]
-        self.item_sims: Dict[int, List[Tuple[int, float, int]]] = {}
+    return train_df, test_df
 
-        self.movie_title: Dict[int, str] = {}
 
-    # -----------------------------
-    # Data I/O
-    # -----------------------------
-    def load(self) -> None:
-        """Load processed CSVs and build user history."""
-        self.ratings = self._read_csv(self.cfg.ratings_csv, "ratings")
-        self.movies = self._read_csv(self.cfg.movies_csv, "movies")
-        self.popular = self._read_csv(self.cfg.popular_csv, "popular")
+def _build_user_hist_from_df(train_df: pd.DataFrame) -> Dict[int, List[Tuple[int, float]]]:
+    hist: Dict[int, List[Tuple[int, float]]] = {}
+    for r in train_df.itertuples(index=False):
+        hist.setdefault(int(r.user_id), []).append((int(r.movie_id), float(r.rating)))
+    return hist
 
-        self.movie_title = dict(
-            zip(self.movies["movie_id"].astype(int), self.movies["title"].astype(str))
+
+def _predict_raw_rating(
+    model: IBCFRecommender,
+    user_id: int,
+    target_movie_id: int,
+) -> Optional[float]:
+    """
+    Predict raw score for (user, target_movie) using the SAME scoring rule as recommend():
+      pred = sum_j sim(target, j) * r_u,j / sum_j |sim(target, j)|
+    Implementation is evaluation-only (does not change backend/model code).
+    """
+    hist = model.user_hist.get(int(user_id), [])
+    if not hist:
+        return None
+
+    num = 0.0
+    den = 0.0
+    tgt = int(target_movie_id)
+
+    for seed_mid, seed_r in hist:
+        # We have sims stored as: item_sims[seed_mid] = [(other_mid, sim, common), ...]
+        # We need sim(seed_mid, target_movie) from this list.
+        for other_mid, sim, _common in model.item_sims.get(int(seed_mid), []):
+            if int(other_mid) == tgt:
+                num += float(sim) * float(seed_r)
+                den += abs(float(sim))
+                break  # target found in this seed's neighbor list
+
+    if den <= 1e-12:
+        return None
+    return float(num / den)
+
+
+def evaluate_ibcf(
+    cfg: ModelConfig,
+    k: int = 10,
+    seed: int = 42,
+) -> EvalResult:
+    """
+    Offline evaluation:
+      - Split ratings per user: last rating -> test, rest -> train
+      - Fit IBCF on train
+      - RMSE: compare raw predicted score vs true rating for test rows (when prediction possible)
+      - Recall@K: run recommend(user) and see if test item appears in top-K
+    """
+    # 1) Load full data using the same config paths
+    model = IBCFRecommender(cfg)
+    model.load()  # loads ratings + movies + popular
+
+    assert model.ratings is not None
+    ratings = model.ratings
+
+    # 2) Train-test split
+    train_df, test_df = _train_test_split_last_per_user(
+        ratings=ratings,
+        min_train_ratings=cfg.min_user_history,
+    )
+
+    # 3) Override model's train data ONLY for evaluation (backend unchanged)
+    model.ratings = train_df
+    model.user_hist = _build_user_hist_from_df(train_df)
+
+    # 4) Fit (or load cached) similarities on TRAIN set
+    # For evaluation correctness, we should fit on the train_df.
+    # Using load_or_fit() could load cache from a different dataset, so we call fit().
+    model.fit()
+
+    # 5) RMSE
+    sq_err_sum = 0.0
+    used_for_rmse = 0
+    skipped_no_pred = 0
+
+    for r in test_df.itertuples(index=False):
+        uid = int(r.user_id)
+        mid = int(r.movie_id)
+        true = float(r.rating)
+
+        pred = _predict_raw_rating(model, uid, mid)
+        if pred is None:
+            skipped_no_pred += 1
+            continue
+
+        sq_err_sum += (pred - true) ** 2
+        used_for_rmse += 1
+
+    rmse = float(np.sqrt(sq_err_sum / used_for_rmse)) if used_for_rmse > 0 else float("nan")
+
+    # 6) Recall@K
+    hits = 0
+    users_count = 0
+
+    # Evaluate only users present in test_df (each user exactly 1 test row here)
+    for r in test_df.itertuples(index=False):
+        uid = int(r.user_id)
+        test_mid = int(r.movie_id)
+
+        # Get top-K recs
+        recs = model.recommend(
+            user_id=uid,
+            limit=int(k),
+            offset=0,
+            exclude_movie_ids=None,
+            use_social=False,
+            seed_movie_ids=None,
         )
 
-        self.user_hist.clear()
-        for r in self.ratings.itertuples(index=False):
-            uid = int(r.user_id)
-            mid = int(r.movie_id)
-            rating = float(r.rating)
-            self.user_hist.setdefault(uid, []).append((mid, rating))
+        rec_ids = {int(x["movie_id"]) for x in recs}
+        if test_mid in rec_ids:
+            hits += 1
+        users_count += 1
 
-    def _read_csv(self, path: str, name: str) -> pd.DataFrame:
-        """Read a CSV with a helpful error message."""
-        try:
-            return pd.read_csv(path)
-        except Exception as e:
-            raise RuntimeError(f"Failed to read {name} CSV at '{path}': {e}")
+    recall_at_k = float(hits / users_count) if users_count > 0 else float("nan")
 
-    # -----------------------------
-    # Training (similarity building)
-    # -----------------------------
-    def fit(self) -> None:
-        """Build item-item similarity lists."""
-        if self.ratings is None:
-            raise RuntimeError("Call load() before fit().")
+    return EvalResult(
+        rmse=rmse,
+        rmse_n=used_for_rmse,
+        recall_at_k=recall_at_k,
+        recall_users=users_count,
+        k=int(k),
+        test_rows=int(len(test_df)),
+        used_rows_for_rmse=used_for_rmse,
+        skipped_rows_no_pred=skipped_no_pred,
+    )
 
-        df = self._mean_center_ratings(self.ratings)
-        norm, dot, common = self._accumulate_pair_stats(df)
-        self.item_sims = self._build_similarity_lists(norm, dot, common)
 
-    def _mean_center_ratings(self, ratings: pd.DataFrame) -> pd.DataFrame:
-        """Add mean-centered rating column r_c = rating - mean(user)."""
-        df = ratings.copy()
-        user_mean = df.groupby("user_id")["rating"].mean()
-        df["r_c"] = df["rating"] - df["user_id"].map(user_mean).astype(float)
-        return df
+def write_report(
+    out_dir: str,
+    cfg: ModelConfig,
+    result: EvalResult,
+) -> Tuple[str, str]:
+    os.makedirs(out_dir, exist_ok=True)
 
-    def _accumulate_pair_stats(
-        self, df: pd.DataFrame
-    ) -> Tuple[Dict[int, float], Dict[Tuple[int, int], float], Dict[Tuple[int, int], int]]:
-        """
-        Accumulate:
-          - norm[item] = sum r_c^2
-          - dot[(i,j)] = sum r_ci * r_cj over common users
-          - common[(i,j)] = number of common raters
-        """
-        norm: Dict[int, float] = {}
-        dot: Dict[Tuple[int, int], float] = {}
-        common: Dict[Tuple[int, int], int] = {}
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
 
-        for _uid, g in df.groupby("user_id"):
-            items = list(zip(g["movie_id"].astype(int), g["r_c"].astype(float)))
+    report_md = os.path.join(out_dir, "evaluation_report.md")
+    report_json = os.path.join(out_dir, "evaluation_metrics.json")
 
-            # norms
-            for i, rci in items:
-                norm[i] = norm.get(i, 0.0) + rci * rci
+    md = []
+    md.append("# Offline Evaluation Report (IBCF)")
+    md.append("")
+    md.append(f"Generated: **{ts}**")
+    md.append("")
+    md.append("## Setup")
+    md.append(f"- Ratings CSV: `{cfg.ratings_csv}`")
+    md.append(f"- Movies CSV: `{cfg.movies_csv}`")
+    md.append(f"- Popular CSV: `{cfg.popular_csv}`")
+    md.append(f"- min_user_history: `{cfg.min_user_history}`")
+    md.append("")
+    md.append("## Split Method")
+    md.append("- Leave-one-out per user: **last rating by timestamp** is the test example, rest is train.")
+    md.append(f"- Only users with at least `{cfg.min_user_history + 1}` total ratings are included.")
+    md.append("")
+    md.append("## Metrics")
+    md.append(f"- **RMSE**: `{result.rmse:.4f}` (computed on `{result.rmse_n}` test rows)")
+    md.append(f"- **Recall@{result.k}**: `{result.recall_at_k:.4f}` (users: `{result.recall_users}`)")
+    md.append("")
+    md.append("## Notes")
+    md.append(f"- Test rows total: `{result.test_rows}`")
+    md.append(f"- RMSE skipped (no similarity path): `{result.skipped_rows_no_pred}`")
+    md.append("")
 
-            # pairwise dot + common
-            n = len(items)
-            for a in range(n):
-                i, rci = items[a]
-                for b in range(a + 1, n):
-                    j, rcj = items[b]
-                    if i == j:
-                        continue
-                    key = (i, j) if i < j else (j, i)
-                    dot[key] = dot.get(key, 0.0) + (rci * rcj)
-                    common[key] = common.get(key, 0) + 1
+    with open(report_md, "w", encoding="utf-8") as f:
+        f.write("\n".join(md))
 
-        return norm, dot, common
+    payload = {
+        "generated_utc": ts,
+        "model": "IBCFRecommender",
+        "split": "leave_one_out_last_timestamp",
+        "k": result.k,
+        "rmse": result.rmse,
+        "rmse_n": result.rmse_n,
+        "recall_at_k": result.recall_at_k,
+        "recall_users": result.recall_users,
+        "test_rows": result.test_rows,
+        "used_rows_for_rmse": result.used_rows_for_rmse,
+        "skipped_rows_no_pred": result.skipped_rows_no_pred,
+        "config": {
+            "processed_dir": cfg.processed_dir,
+            "ratings_csv": cfg.ratings_csv,
+            "movies_csv": cfg.movies_csv,
+            "popular_csv": cfg.popular_csv,
+            "min_user_history": cfg.min_user_history,
+            "min_common_raters": cfg.min_common_raters,
+            "topk_sim_per_item": cfg.topk_sim_per_item,
+        },
+    }
 
-    def _build_similarity_lists(
-        self,
-        norm: Dict[int, float],
-        dot: Dict[Tuple[int, int], float],
-        common: Dict[Tuple[int, int], int],
-    ) -> Dict[int, List[Tuple[int, float, int]]]:
-        """Compute cosine similarities and keep top-k neighbors per item."""
-        sims: Dict[int, List[Tuple[int, float, int]]] = {}
+    with open(report_json, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
 
-        for (i, j), d in dot.items():
-            c = common.get((i, j), 0)
-            if c < self.cfg.min_common_raters:
-                continue
+    return report_md, report_json
 
-            ni, nj = norm.get(i, 0.0), norm.get(j, 0.0)
-            if ni <= 0.0 or nj <= 0.0:
-                continue
 
-            sim = float(d / (np.sqrt(ni) * np.sqrt(nj)))
-            if sim <= 0.0:
-                continue
+def main() -> None:
+    p = argparse.ArgumentParser(description="Offline evaluation for IBCF (RMSE + Recall@K)")
+    p.add_argument("--processed-dir", default="aii/data/processed")
+    p.add_argument("--k", type=int, default=10)
+    p.add_argument("--out-dir", default="aii/evaluation/output")
+    args = p.parse_args()
 
-            sims.setdefault(i, []).append((j, sim, c))
-            sims.setdefault(j, []).append((i, sim, c))
+    cfg = ModelConfig(processed_dir=args.processed_dir)
+    result = evaluate_ibcf(cfg, k=args.k)
 
-        out: Dict[int, List[Tuple[int, float, int]]] = {}
-        for i, lst in sims.items():
-            lst.sort(key=lambda x: x[1], reverse=True)
-            out[i] = lst[: self.cfg.topk_sim_per_item]
+    md_path, json_path = write_report(args.out_dir, cfg, result)
 
-        return out
+    print("Done.")
+    print(f"RMSE: {result.rmse:.4f} (n={result.rmse_n}, skipped={result.skipped_rows_no_pred})")
+    print(f"Recall@{result.k}: {result.recall_at_k:.4f} (users={result.recall_users})")
+    print(f"Report: {md_path}")
+    print(f"Metrics: {json_path}")
 
-    # -----------------------------
-    # Recommendation
-    # -----------------------------
-    def recommend(
-        self,
-        user_id: int,
-        limit: int = 20,
-        offset: int = 0,
-        exclude_movie_ids: Optional[List[int]] = None,
-        use_social: bool = False,  # reserved for later
-        seed_movie_ids: Optional[List[int]] = None,
-    ) -> List[Dict]:
-        """Return ranked recommendations in backend-friendly format."""
-        if limit > self.cfg.max_k:
-            limit = self.cfg.max_k
 
-        exclude = set(exclude_movie_ids or [])
-        hist = self.user_hist.get(int(user_id), [])
-        seen = {mid for mid, _ in hist}
-
-        # Optional: treat seed_movie_ids as additional "history" (useful for demo)
-        if seed_movie_ids:
-            for mid in seed_movie_ids:
-                if mid not in seen:
-                    hist.append((int(mid), 4.0))  # neutral-ish positive
-                    seen.add(int(mid))
-
-        # Cold start
-        if len(hist) < self.cfg.min_user_history:
-            return self._popular_fallback(limit=limit, offset=offset, exclude=exclude)
-
-        window, best_seed = self._score_and_slice(hist, seen, exclude, limit, offset)
-
-        if not window:
-            return self._popular_fallback(limit=limit, offset=offset, exclude=exclude)
-
-        return self._format_window(window, best_seed, offset)
-
-    def _score_and_slice(
-        self,
-        hist: List[Tuple[int, float]],
-        seen: set[int],
-        exclude: set[int],
-        limit: int,
-        offset: int,
-    ) -> Tuple[List[Tuple[int, float]], Dict[int, Tuple[int, float]]]:
-        """Score candidates and return the requested page window."""
-        num: Dict[int, float] = {}
-        den: Dict[int, float] = {}
-        best_seed: Dict[int, Tuple[int, float]] = {}  # item -> (seed_movie, best_contrib)
-
-        for seed_mid, seed_r in hist:
-            for other_mid, sim, _common in self.item_sims.get(seed_mid, []):
-                if other_mid in seen or other_mid in exclude:
-                    continue
-
-                contrib = sim * seed_r
-                num[other_mid] = num.get(other_mid, 0.0) + contrib
-                den[other_mid] = den.get(other_mid, 0.0) + abs(sim)
-
-                prev = best_seed.get(other_mid)
-                if prev is None or contrib > prev[1]:
-                    best_seed[other_mid] = (seed_mid, contrib)
-
-        scored: List[Tuple[int, float]] = []
-        for mid, n in num.items():
-            d = den.get(mid, 1e-9)
-            scored.append((mid, float(n / d)))
-
-        scored.sort(key=lambda x: x[1], reverse=True)
-        window = scored[offset : offset + limit]
-        return window, best_seed
-
-    def _format_window(
-        self,
-        window: List[Tuple[int, float]],
-        best_seed: Dict[int, Tuple[int, float]],
-        offset: int,
-    ) -> List[Dict]:
-        """Convert scored results to response objects (same schema as before)."""
-        vals = [s for _, s in window]
-        vmin, vmax = min(vals), max(vals)
-
-        def to01(x: float) -> float:
-            if vmax - vmin < 1e-9:
-                return 0.5
-            return (x - vmin) / (vmax - vmin)
-
-        items: List[Dict] = []
-        for idx, (mid, pred) in enumerate(window, start=1):
-            seed_mid, _ = best_seed.get(mid, (None, 0.0))
-            items.append(
-                {
-                    "movie_id": int(mid),
-                    "score": float(to01(pred)),
-                    "rank": int(offset + idx),
-                    "explanation": {
-                        "primary_reason": "because_you_rated",
-                        "confidence": 0.75,
-                        "factors": [
-                            {
-                                "type": "because_you_rated",
-                                "weight": 1.0,
-                                "value": 1,
-                                "payload": {"seed_movie_ids": [int(seed_mid)] if seed_mid else []},
-                                "description": "Recommended based on similar movies you rated",
-                            }
-                        ],
-                    },
-                }
-            )
-        return items
-
-    # -----------------------------
-    # Explain
-    # -----------------------------
-    def explain(self, user_id: int, movie_id: int) -> Dict:
-        """Return a simple explanation payload (same behavior)."""
-        hist = self.user_hist.get(int(user_id), [])
-
-        if len(hist) < self.cfg.min_user_history:
-            return {
-                "movie_id": int(movie_id),
-                "ai_score": 50,
-                "explanation": {
-                    "primary_reason": "popular",
-                    "confidence": 0.6,
-                    "factors": [
-                        {
-                            "type": "popular",
-                            "weight": 1.0,
-                            "value": 1,
-                            "payload": {},
-                            "description": "Recommended because it's popular among users",
-                        }
-                    ],
-                },
-                "social_signals": {
-                    "friend_ratings_count": 0,
-                    "friend_ratings_avg": None,
-                    "friend_watch_count": 0,
-                },
-            }
-
-        best = self._best_similar_seed(hist, movie_id)
-
-        if best is None:
-            payload = {"seed_movie_ids": [mid for mid, _ in hist[:2]]}
-            desc = "Recommended based on your rating history"
-            conf = 0.65
-        else:
-            payload = {"seed_movie_ids": [int(best[0])]}
-            desc = "Recommended because you rated a similar movie"
-            conf = 0.78
-
-        return {
-            "movie_id": int(movie_id),
-            "ai_score": int(round(conf * 100)),
-            "explanation": {
-                "primary_reason": "because_you_rated",
-                "confidence": float(conf),
-                "factors": [
-                    {
-                        "type": "because_you_rated",
-                        "weight": 1.0,
-                        "value": 1,
-                        "payload": payload,
-                        "description": desc,
-                    }
-                ],
-            },
-            "social_signals": {
-                "friend_ratings_count": 0,
-                "friend_ratings_avg": None,
-                "friend_watch_count": 0,
-            },
-        }
-
-    def _best_similar_seed(
-        self, hist: List[Tuple[int, float]], movie_id: int
-    ) -> Optional[Tuple[int, float]]:
-        """Find the strongest (seed_movie, similarity) link in the user's history."""
-        best: Optional[Tuple[int, float]] = None
-        target = int(movie_id)
-
-        for seed_mid, _r in hist:
-            for other_mid, sim, _c in self.item_sims.get(seed_mid, []):
-                if int(other_mid) != target:
-                    continue
-                if best is None or sim > best[1]:
-                    best = (seed_mid, float(sim))
-
-        return best
-
-    # -----------------------------
-    # Popular fallback
-    # -----------------------------
-    def _popular_fallback(self, limit: int, offset: int, exclude: set[int]) -> List[Dict]:
-        assert self.popular is not None
-
-        rows = self.popular[~self.popular["movie_id"].isin(list(exclude))].iloc[offset : offset + limit]
-
-        items: List[Dict] = []
-        for idx, r in enumerate(rows.itertuples(index=False), start=1):
-            items.append(
-                {
-                    "movie_id": int(r.movie_id),
-                    "score": 0.5,  # neutral for cold-start
-                    "rank": int(offset + idx),
-                    "explanation": {
-                        "primary_reason": "popular",
-                        "confidence": 0.6,
-                        "factors": [
-                            {
-                                "type": "popular",
-                                "weight": 1.0,
-                                "value": int(getattr(r, "rating_count", 1)),
-                                "payload": {},
-                                "description": "Recommended because it's popular",
-                            }
-                        ],
-                    },
-                }
-            )
-        return items
+if __name__ == "__main__":
+    main()
