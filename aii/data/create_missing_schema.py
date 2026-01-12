@@ -1,6 +1,8 @@
-from sqlalchemy import create_engine, text
-import sys
+
 import os
+import sys
+from sqlalchemy import create_engine, text
+
 
 # Kendi Connection String'inizi buraya yapıştırın
 DATABASE_URL = "postgresql://neondb_owner:npg_ANY0Q7uFlZSi@ep-restless-art-ah6dr023-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
