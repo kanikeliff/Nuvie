@@ -12,10 +12,10 @@ requests
 sqlalchemy>=2.0
 psycopg[binary]
 
-# Auth / Security
+# Auth / Security  (IMPORTANT: pin bcrypt)
 python-jose[cryptography]
-passlib[bcrypt]
-bcrypt
+passlib==1.7.4
+bcrypt==3.2.2
 
 # AI / ML
 numpy>=1.25
