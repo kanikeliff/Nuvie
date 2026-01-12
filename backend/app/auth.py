@@ -3,8 +3,8 @@ import uuid
 import traceback
 import logging
 from typing import Any, Dict
-from pydantic import BaseModel, EmailStr
 
+from pydantic import BaseModel, EmailStr
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -17,9 +17,7 @@ from backend.app.security import (
     create_access_token,
     decode_token,
 )
-
 from backend.app.schemas import LoginRequest, TokenResponse, UserPublic
-
 
 class RegisterIn(BaseModel):
     email: EmailStr
@@ -37,15 +35,12 @@ def demo_mode_on() -> bool:
 @router.post("/register")
 def register(body: RegisterIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
     try:
-        # DEMO kapalı olmalı
         if demo_mode_on():
             return {"ok": True, "email": str(body.email)}
 
-        # validate/normalize
         email = str(body.email).lower().strip()
         pw = str(body.password).strip()
 
-        # password byte-length check for bcrypt
         if len(pw.encode("utf-8")) > 72:
             raise HTTPException(status_code=400, detail="Password too long")
         if len(pw) < 6:
@@ -53,7 +48,6 @@ def register(body: RegisterIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
 
         existing = db.query(User).filter(User.email == email).first()
         if existing:
-            # user exists -> 409 with JSON detail
             raise HTTPException(status_code=409, detail={"error": "Email already registered"})
 
         user = User(
@@ -66,15 +60,13 @@ def register(body: RegisterIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
         db.refresh(user)
 
         return {"ok": True, "email": user.email}
+
     except HTTPException:
-        # re-raise HTTPExceptions as-is
         raise
-    except Exception as e:  # pragma: no cover - global safety
+    except Exception as e:
         tb = traceback.format_exc()
-        # print stacktrace for debugging and log it
         print(tb)
         logging.exception("Unhandled exception in register endpoint")
-        # return a JSON-friendly 500
         raise HTTPException(status_code=500, detail={"error": repr(e)})
 
 @router.post("/login", response_model=TokenResponse)
@@ -86,7 +78,6 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     email = str(req.email).lower().strip()
     pw = str(req.password).strip()
 
-    # password byte-length check for bcrypt
     if len(pw.encode("utf-8")) > 72:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
