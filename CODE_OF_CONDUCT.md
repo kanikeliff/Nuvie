@@ -19,5 +19,5 @@ Any violation of this code may result in a warning or removal from the project.
 
 ---
 
-Let’s build something great — together. 🚀
+Let’s build something great, together.
 
