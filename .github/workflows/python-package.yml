@@ -37,14 +37,10 @@ jobs:
       run: |
         ls -la
         ls -la aii || true
-        python -c "import os, sys; print('CWD=', os.getcwd()); print('PYTHONPATH=', os.environ.get('PYTHONPATH')); print('sys.path=', sys.path)"
+        python -c "import os, sys; print('CWD=', os.getcwd()); print('PYTHONPATH=', os.environ.get('PYTHONPATH')); print('sys.path[0:5]=', sys.path[0:5])"
         python -c "import aii; print('aii imported from', aii.__file__)"
       env:
         PYTHONPATH: .
-
-
+    
     - name: Test with pytest
-      run: pytest -q
-      
-      env:
-            PYTHONPATH: .
+      run: PYTHONPATH=. pytest -q
