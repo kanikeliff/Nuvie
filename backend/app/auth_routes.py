@@ -27,11 +27,23 @@ def register(user_data: dict, db=Depends(get_db)):
     if "email" not in user_data or "password" not in user_data:
         raise HTTPException(status_code=400, detail="Email and password required")
 
-    existing_user = db.query(User).filter(User.email == user_data["email"]).first()
+    email = user_data["email"].lower().strip()
+    password = user_data["password"].strip()
+
+    # password byte-length check for bcrypt (max 72 bytes)
+    if len(password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password too long")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password too short")
+
+    existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    hashed_password = hash_password(user_data["password"])
+    try:
+        hashed_password = hash_password(password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Password validation error: {str(e)}")
 
     new_user = User(
         id=str(uuid.uuid4()),
