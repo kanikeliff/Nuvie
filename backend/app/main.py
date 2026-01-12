@@ -61,3 +61,10 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal Server Error", "error": str(exc)},
     )
+
+import sys
+
+@app.get("/debug/python")
+def debug_python():
+    return {"python": sys.version}
+
