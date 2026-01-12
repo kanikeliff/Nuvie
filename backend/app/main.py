@@ -2,8 +2,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import sys
-import logging
 import traceback
+import logging
 
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
@@ -15,20 +15,15 @@ from backend.models.user import User  # noqa: F401
 
 from backend.app.auth import router as auth_router
 from backend.app.feed import router as feed_router
-from backend.app.ai_router import router as ai_router  # if you have it
 
 app = FastAPI(title="Nuvie Backend API")
 
-# create tables
+# Create tables
 Base.metadata.create_all(bind=engine)
 
-# routers
+# Routers
 app.include_router(auth_router)
 app.include_router(feed_router)
-
-# AI router (ONLY include if it exists & works)
-# If AI router is protected inside itself, no need to do dependencies=[]
-app.include_router(ai_router)
 
 @app.get("/")
 def root():
