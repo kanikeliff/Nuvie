@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import time
 import threading
+import time
 import traceback
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
 
 from aii.models.ibcf import IBCFRecommender, ModelConfig
 
@@ -13,8 +13,6 @@ from aii.models.ibcf import IBCFRecommender, ModelConfig
 # ----------------------------------------
 
 AI_ENABLED = os.getenv("AI_ENABLED", "1") == "1"
-CACHE_DIR = os.getenv("AI_CACHE_DIR", "/tmp/nuvie_ai_cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ----------------------------------------
 # Singleton state
@@ -22,29 +20,24 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 _lock = threading.Lock()
 _model: Optional[IBCFRecommender] = None
-_model_ready: bool = False
-_model_error: Optional[Dict[str, str]] = None
+_model_error: Optional[Dict[str, Optional[str]]] = None
 
-
-# ----------------------------------------
-# Internal: load model exactly once
-# ----------------------------------------
 
 def _load_model_once() -> None:
-    global _model, _model_ready, _model_error
+    """Load the recommender once (safe for repeated calls)."""
+    global _model, _model_error
 
     if not AI_ENABLED:
-        _model_ready = False
+        _model = None
         _model_error = {"message": "AI_DISABLED", "trace": None}
         return
 
     # Fast path
-    if _model_ready:
+    if _model is not None:
         return
 
     with _lock:
-        # double-check inside lock
-        if _model_ready:
+        if _model is not None:
             return
 
         try:
@@ -54,50 +47,37 @@ def _load_model_once() -> None:
             cfg = ModelConfig()
             model = IBCFRecommender(cfg)
 
-            # Use whichever your repo provides
-            if hasattr(model, "load"):
-                model.load()
+            model.load()
             if hasattr(model, "load_or_fit"):
                 model.load_or_fit()
+            else:
+                model.fit()
 
             _model = model
-            _model_ready = True
             _model_error = None
 
-            print(f"[AI] Model loaded in {int((time.time() - t0) * 1000)} ms")
+            ms = int((time.time() - t0) * 1000)
+            print(f"[AI] Model loaded in {ms} ms")
 
         except Exception as e:
             _model = None
-            _model_ready = False
-            _model_error = {
-                "message": repr(e),
-                "trace": traceback.format_exc(),
-            }
+            _model_error = {"message": repr(e), "trace": traceback.format_exc()}
             print("[AI] Model failed to load:", _model_error["message"])
             print(_model_error["trace"])
 
 
-# ----------------------------------------
-# Public API
-# ----------------------------------------
-
-def ai_status() -> dict:
+def ai_status() -> Dict:
     return {
         "enabled": AI_ENABLED,
-        "ready": _model_ready,
+        "ready": _model is not None,
         "error": _model_error,
     }
 
 
-def recommend_for_user(
-    user_id: int,
-    limit: int = 20,
-    offset: int = 0,
-) -> List[Dict]:
-
+def recommend_for_user(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict]:
     _load_model_once()
 
-    if not _model_ready or _model is None:
+    if _model is None:
         return []
 
     items = _model.recommend(
@@ -111,15 +91,15 @@ def recommend_for_user(
 
     out: List[Dict] = []
     for it in items:
-        out.append({
-            "movie_id": int(it["movie_id"]),
-            "ai_score": int(it.get("ai_score", 50)),
-            "social_score": int(it.get("social_score", 0)),
-            "reason": (
-                (it.get("explanation") or {}).get("primary_reason")
-                if isinstance(it.get("explanation"), dict)
-                else it.get("reason", "ibcf")
-            ),
-        })
+        explanation = it.get("explanation") if isinstance(it.get("explanation"), dict) else {}
+
+        out.append(
+            {
+                "movie_id": int(it["movie_id"]),
+                "ai_score": int(it.get("ai_score", 50)),
+                "social_score": int(it.get("social_score", 0)),
+                "reason": str(explanation.get("primary_reason", it.get("reason", "ibcf"))),
+            }
+        )
 
     return out
