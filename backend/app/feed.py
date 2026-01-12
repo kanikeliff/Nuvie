@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 from sqlalchemy import bindparam
@@ -31,7 +31,7 @@ def ensure_movies_table_seeded(db: Session) -> None:
     """
     try:
         db.execute(text("SELECT 1 FROM movies LIMIT 1"))
-    except OperationalError:
+    except (OperationalError, ProgrammingError):
         db.execute(
             text(
                 """
