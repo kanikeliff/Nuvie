@@ -1,36 +1,34 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+import sys
+import logging
+import traceback
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from fastapi import Depends
 
 from backend.session import engine, Base, get_db
 from backend.models.user import User  # noqa: F401
 
 from backend.app.auth import router as auth_router
 from backend.app.feed import router as feed_router
-from backend.app.ai_router import router as ai_router
-from fastapi import Security, Request
-from fastapi.responses import JSONResponse
-import traceback
-import logging
+from backend.app.ai_router import router as ai_router  # if you have it
 
 app = FastAPI(title="Nuvie Backend API")
 
-# tabloları oluştur
+# create tables
 Base.metadata.create_all(bind=engine)
 
-# routerlar
+# routers
 app.include_router(auth_router)
 app.include_router(feed_router)
-# Bypass authentication for /ai/* paths
-app.include_router(ai_router, dependencies=[])
+
+# AI router (ONLY include if it exists & works)
+# If AI router is protected inside itself, no need to do dependencies=[]
+app.include_router(ai_router)
 
 @app.get("/")
 def root():
@@ -50,21 +48,16 @@ def db_ping(db: Session = Depends(get_db)):
     users_exists = db.execute(text("SELECT to_regclass('public.users')")).scalar()
     return {"select_1": one, "users_table": users_exists}
 
+@app.get("/debug/python")
+def debug_python():
+    return {"python": sys.version}
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    # print and log traceback for debugging
     print(tb)
     logging.exception("Unhandled exception in application")
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal Server Error", "error": str(exc)},
     )
-
-import sys
-
-@app.get("/debug/python")
-def debug_python():
-    return {"python": sys.version}
-
